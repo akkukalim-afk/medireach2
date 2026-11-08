@@ -1,0 +1,263 @@
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "rhel-openssl-1.0.x", "rhel-openssl-3.0.x", "debian-openssl-3.0.x"]
+}
+
+enum Role {
+  CUSTOMER
+  PHARMACY_OWNER
+  DELIVERY_PARTNER
+  ADMIN
+}
+
+enum MedicineCategory {
+  PRESCRIPTION
+  OTC
+  VITAMINS
+  PERSONAL_CARE
+}
+
+enum PrescriptionStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum OrderStatus {
+  PLACED
+  ACCEPTED
+  PREPARING
+  OUT_FOR_DELIVERY
+  DELIVERED
+  CANCELLED
+  DELAYED
+}
+
+enum DeliveryStatus {
+  ASSIGNED
+  PICKED_UP
+  DELIVERED
+  FAILED
+}
+
+model User {
+  id           String    @id @default(cuid())
+  name         String
+  email        String    @unique
+  passwordHash String
+  role         Role      @default(CUSTOMER)
+  phone        String?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  pharmacies       Pharmacy[]
+  orders           Order[]
+  prescriptions    Prescription[]       @relation("CustomerPrescriptions")
+  verifiedRx       Prescription[]       @relation("PharmacistVerifications")
+  deliveries       DeliveryAssignment[]
+  addresses        Address[]
+  notifications    Notification[]
+}
+
+model Pharmacy {
+  id              String   @id @default(cuid())
+  name            String
+  licenseNumber   String   @unique
+  ownerId         String
+  owner           User     @relation(fields: [ownerId], references: [id])
+  address         String
+  landmark        String?
+  lat             Float
+  lng             Float
+  phone           String
+  rating          Float    @default(4.5)
+  isOpen          Boolean  @default(true)
+  isApproved      Boolean  @default(true)
+  prepTimeMinutes Int      @default(15)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  batches         InventoryBatch[]
+  orders          Order[]
+
+  @@index([lat, lng])
+}
+
+model Medicine {
+  id                   String           @id @default(cuid())
+  name                 String
+  genericName          String
+  brand                String
+  category             MedicineCategory @default(OTC)
+  dosageForm           String           // Tablet, Syrup, Capsule, Inhaler, Gel, etc.
+  strength             String           // 500mg, 625mg, 10ml, etc.
+  packSize             String           // 10 Tablets, 100ml bottle
+  manufacturer         String
+  description          String
+  sideEffects          String?
+  requiresPrescription Boolean          @default(false)
+  image                String?
+  createdAt            DateTime         @default(now())
+  updatedAt            DateTime         @updatedAt
+
+  batches              InventoryBatch[]
+  orderItems           OrderItem[]
+
+  @@index([name])
+  @@index([genericName])
+  @@index([category])
+}
+
+model InventoryBatch {
+  id               String    @id @default(cuid())
+  pharmacyId       String
+  pharmacy         Pharmacy  @relation(fields: [pharmacyId], references: [id], onDelete: Cascade)
+  medicineId       String
+  medicine         Medicine  @relation(fields: [medicineId], references: [id], onDelete: Cascade)
+  batchNumber      String
+  quantity         Int       @default(0)
+  mfgDate          DateTime
+  expiryDate       DateTime
+  mrp              Float
+  salePrice        Float
+  isFlaggedExpired Boolean   @default(false)
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  orderItems       OrderItem[]
+
+  @@index([pharmacyId])
+  @@index([medicineId])
+  @@index([expiryDate])
+}
+
+model Prescription {
+  id              String             @id @default(cuid())
+  customerId      String
+  customer        User               @relation("CustomerPrescriptions", fields: [customerId], references: [id], onDelete: Cascade)
+  orderId         String?            @unique
+  order           Order?             @relation(fields: [orderId], references: [id])
+  fileUrl         String
+  fileName        String
+  fileType        String             // image/jpeg, image/png, application/pdf
+  status          PrescriptionStatus @default(PENDING)
+  verifiedById    String?
+  verifiedBy      User?              @relation("PharmacistVerifications", fields: [verifiedById], references: [id])
+  pharmacistNotes String?
+  uploadedAt      DateTime           @default(now())
+  verifiedAt      DateTime?
+
+  @@index([customerId])
+  @@index([status])
+}
+
+model Order {
+  id                 String             @id @default(cuid())
+  orderNumber        String             @unique
+  customerId         String
+  customer           User               @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  pharmacyId         String
+  pharmacy           Pharmacy           @relation(fields: [pharmacyId], references: [id])
+  originalPharmacyId String?
+  totalAmount        Float
+  discountAmount     Float              @default(0)
+  deliveryFee        Float              @default(30)
+  netAmount          Float
+  deliveryAddress    String
+  customerPhone      String
+  customerLat        Float?             @default(13.1000)
+  customerLng        Float?             @default(77.5950)
+  status             OrderStatus        @default(PLACED)
+  placedAt           DateTime           @default(now())
+  promisedEta        DateTime
+  deliveredAt        DateTime?
+  isDelayed          Boolean            @default(false)
+  fallbackOffered    Boolean            @default(false)
+
+  items              OrderItem[]
+  statusHistory      OrderStatusHistory[]
+  deliveryAssignment DeliveryAssignment?
+  prescription       Prescription?
+
+  @@index([customerId])
+  @@index([pharmacyId])
+  @@index([status])
+}
+
+model OrderItem {
+  id         String          @id @default(cuid())
+  orderId    String
+  order      Order           @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  medicineId String
+  medicine   Medicine        @relation(fields: [medicineId], references: [id])
+  batchId    String?
+  batch      InventoryBatch? @relation(fields: [batchId], references: [id])
+  quantity   Int
+  unitPrice  Float
+  subtotal   Float
+
+  @@index([orderId])
+  @@index([medicineId])
+}
+
+model OrderStatusHistory {
+  id        String      @id @default(cuid())
+  orderId   String
+  order     Order       @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  status    OrderStatus
+  notes     String?
+  timestamp DateTime    @default(now())
+
+  @@index([orderId])
+}
+
+model DeliveryAssignment {
+  id          String         @id @default(cuid())
+  orderId     String         @unique
+  order       Order          @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  partnerId   String
+  partner     User           @relation(fields: [partnerId], references: [id])
+  status      DeliveryStatus @default(ASSIGNED)
+  assignedAt  DateTime       @default(now())
+  pickedUpAt  DateTime?
+  deliveredAt DateTime?
+
+  @@index([partnerId])
+}
+
+model Address {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  label       String   @default("Home") // Home, Work, Other
+  addressLine String
+  locality    String   @default("Yelahanka")
+  city        String   @default("Bengaluru")
+  pincode     String   @default("560064")
+  lat         Float    @default(13.1000)
+  lng         Float    @default(77.5950)
+  isDefault   Boolean  @default(false)
+  createdAt   DateTime @default(now())
+
+  @@index([userId])
+}
+
+model Notification {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title     String
+  message   String
+  type      String   @default("INFO") // INFO, WARNING, SUCCESS, FALLBACK
+  isRead    Boolean  @default(false)
+  link      String?
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+}
+
